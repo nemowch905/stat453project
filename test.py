@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Mar 31 12:19:05 2020
+Created on Sun Apr 26 00:59:35 2020
 
 @author: nemow
 """
@@ -10,6 +10,7 @@ import sys
 import argparse
 from datetime import datetime
 
+from torch.nn import functional as F
 import numpy as np
 import torch
 import torch.nn as nn
@@ -69,86 +70,45 @@ def get_dataloader(mean, std, c_path, p_path, batch_size=16, num_workers=0, shuf
 
     return data_loader
 
-def train(epoch):
-
-    net.train()
-    for batch_index, (images, labels) in enumerate(train_loader):   
 
 
-        images = Variable(images)
-        labels = Variable(labels)
-        labels = labels.cuda()
-        images = images.cuda()
 
-        optimizer.zero_grad()
-#        with torch.no_grad():
-        outputs = net(images)
-        loss = loss_function(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        
-
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}'.format(
-            loss.item(),
-            optimizer.param_groups[0]['lr'],
-            epoch=epoch,
-            trained_samples=batch_index * args.b + len(images),
-            total_samples=len(train_loader.dataset)
-        ))
-        if epoch <= args.warm:
-            warmup_scheduler.step()
-        #update training loss for each iteration
-
-
-    for name, param in net.named_parameters():
-        layer, attr = os.path.splitext(name)
-        attr = attr[1:]
-
-
-def eval_training(epoch):
+def eval_training():
     net.eval()
 
 
     val_loss = 0.0 # cost function error
     correct = 0.0
-
+    a=0
     for (images, labels) in val_loader:
+        a+=1
         images = Variable(images)
         labels = Variable(labels)
         images = images.cuda()
         labels = labels.cuda()
         with torch.no_grad():
             outputs = net(images)
+            outputs = F.softmax(outputs)
         loss = loss_function(outputs, labels)
         val_loss += loss.item()
-        _, preds = outputs.max(1)
-        correct += preds.eq(labels).sum()
-    file_handle = open('drive/My Drive/data/acc/save_acc.txt',mode='a+')
-    file_handle.write('Epoch: {} validation set: Average loss: {:.4f}, Accuracy: {:.4f} \n'.format(
-        epoch,
-        val_loss / len(val_loader.dataset),
-        correct.float() / len(val_loader.dataset)
-    ))
-    file_handle.close()
-    print('Epoch: {}validation set: Average loss: {:.4f}, Accuracy: {:.4f}'.format(
-        epoch,
-        val_loss / len(val_loader.dataset),
-        correct.float() / len(val_loader.dataset)
-    ))
-    print()
+        prob, preds = outputs.max(1)
+        pred_lst.append(preds[0].item())
+        prob_lst.append(prob[0].item())
 
-    return correct.float() / len(val_loader.dataset)
+
+        print('{}of 14648'.format(a))
+
 
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
     parser.add_argument('-gpu', type=bool, default=True, help='use gpu or not')
     parser.add_argument('-w', type=int, default=2, help='number of workers for dataloader')
-    parser.add_argument('-b', type=int, default=32, help='batch size for dataloader')
+    parser.add_argument('-b', type=int, default=1, help='batch size for dataloader')
     parser.add_argument('-s', type=bool, default=True, help='whether shuffle the dataset')
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
-    parser.add_argument('-conti', type=int, default=0, help='continue?')
+    parser.add_argument('-conti', type=int, default=1, help='continue?')
     parser.add_argument('-chkpoint', type=str, default='drive', help='checkpoint path')
 
     args = parser.parse_args()
@@ -158,64 +118,97 @@ if __name__ == '__main__':
         net = net.cuda()    
         
     #data preprocessing:
-    train_loader = get_dataloader(
-        settings.TRAIN_MEAN,
-        settings.TRAIN_STD,
-        c_path = 'drive/My Drive/data/train/train_data.csv',
-        p_path = 'drive/My Drive/data/train/',
-        num_workers=args.w,
-        batch_size=args.b,
-        shuffle=args.s
-    )
+
     
     val_loader = get_dataloader(
         settings.TRAIN_MEAN,
         settings.TRAIN_STD,
-        c_path = 'drive/My Drive/data/val/val_data.csv',
-        p_path = 'drive/My Drive/data/val/',
+        c_path = 'drive/My Drive/data/test/test_data.csv',
+        p_path = 'drive/My Drive/data/test/',
         num_workers=args.w,
         batch_size=args.b,
-        shuffle=args.s
+        shuffle=False
     )
     
     start_epoch=0
     loss_function = nn.CrossEntropyLoss()
     optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
     train_scheduler = optim.lr_scheduler.StepLR(optimizer,50,gamma=0.2,last_epoch=-1) #learning rate decay
-    iter_per_epoch = len(train_loader)
-    warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
-    checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, 'Xception', settings.TIME_NOW)
     if args.conti == 1:
         checkpoint = torch.load(args.chkpoint)
-        net.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        start_epoch = checkpoint['epoch']
+        net.load_state_dict(checkpoint)
         train_scheduler = optim.lr_scheduler.StepLR(optimizer,50,gamma=0.2,last_epoch=start_epoch)
 
 
     #create checkpoint folder to save model
-    if not os.path.exists(checkpoint_path):
-        os.makedirs(checkpoint_path)
-    checkpoint_path = os.path.join(checkpoint_path, '{net}-{epoch}-{type}.pth')
 
+    pred_lst = []
+    prob_lst = []
     best_acc = 0.0
-    for epoch in range(start_epoch+1, settings.EPOCH):
+    eval_training()
+    dataf = pd.read_csv('test_data.csv')
+    pic_lst = dataf['image_name']
+    vid_lst = dataf['video_name']
+    label_lst = dataf['class_label']
+
+    new_vid_lst = []
+    new_label_lst = []
+    new_prob0_lst = []
+    new_prob1_lst = []
 
 
-        train(epoch)
+
+    temp = vid_lst[0]
+    count = 0
+    prob0 = 0
+    prob1 = 0
+    for j in range(len(label_lst)-1):
+        if vid_lst[j+1] == vid_lst[j]:
+            if pred_lst[j] == 0:
+                prob0 += prob_lst[j]
+                prob1 += (1-prob_lst[j])
+            else:
+                prob1 += prob_lst[j]
+                prob0 += (1-prob_lst[j])
+        else:
+            if pred_lst[j] == 0:
+                prob0 += prob_lst[j]
+                prob1 += (1-prob_lst[j])
+            else:
+                prob1 += prob_lst[j]
+                prob0 += (1-prob_lst[j])
+            new_prob1_lst.append(prob1)
+            new_prob0_lst.append(prob0)
+            new_label_lst.append(label_lst[j])
+            new_vid_lst.append(vid_lst[j])
+            prob1 = 0
+            prob0 = 0
+    new_prob1_lst.append(prob1+(1-prob_lst[14647]))
+    new_prob0_lst.append(prob1+prob_lst[14647])
+    new_label_lst.append(label_lst[14647])
+    new_vid_lst.append(vid_lst[14647])
+
+    dic = {'video_name':new_vid_lst, 
+          'class_label':new_label_lst,
+          'real_probability':new_prob0_lst,
+          'fake_probability':new_prob1_lst}
+    wr_dic = pd.DataFrame(dic)
+    wr_dic.to_csv('test_result.csv')
 
 
-        acc = eval_training(epoch)
-        if epoch > args.warm:
-            train_scheduler.step(epoch)
-        if epoch % 5 == 0:
-            state = {'model':net.state_dict(), 'optimizer':optimizer.state_dict(), 'epoch':epoch}
-            torch.save(state, checkpoint_path.format(net='Xception', epoch=epoch, type='10times'))
-        #start to save best performance model after learning rate decay to 0.01 
-        if epoch > settings.MILESTONES[1] and best_acc < acc:
-            torch.save(net.state_dict(), checkpoint_path.format(net='Xception', epoch=epoch, type='best'))
-            best_acc = acc
-            continue
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
